@@ -3,17 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>HTML Viewer</title>
+    <title>HTML Viewer with AI Suggestions</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
         html, body {
             overflow: hidden;
-            height: 100%; /* Ensure full height */
-        }
-        .code-editor {
-            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
-            tab-size: 2;
+            height: 100%;
         }
         .fade-in {
             animation: fadeIn 0.3s ease-in;
@@ -22,19 +18,62 @@
             from { opacity: 0; }
             to { opacity: 1; }
         }
+        .preview-btn-hidden {
+            opacity: 0.3;
+            pointer-events: all;
+        }
+        .preview-btn-visible {
+            opacity: 0.3;
+            pointer-events: all;
+        }
+        .preview-btn-visible:hover,
+        .preview-btn-hidden:hover {
+            opacity: 1;
+        }
+        #editorContainer {
+            height: 100vh;
+            width: 100%;
+        }
+        .monaco-editor {
+            --vscode-editor-background: #f9fafb !important;
+        }
+        .dark .monaco-editor {
+            --vscode-editor-background: #1f2937 !important;
+        }
+        .suggestion-status {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            z-index: 1000;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+        .suggestion-status.visible {
+            opacity: 1;
+        }
     </style>
 </head>
 <body class="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 transition-colors duration-300">
     <!-- Editor View -->
-    <div id="editorView" class="h-screen p-6 fade-in">
-        <!-- Editor Area -->
-        <textarea id="codeEditor" class="code-editor w-full h-full resize-none bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg p-4 text-base focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 transition-colors" placeholder="Paste or write your HTML code here..." spellcheck="false"></textarea>
+    <div id="editorView" class="h-screen fade-in">
+        <!-- Monaco Editor Container -->
+        <div id="editorContainer"></div>
+        
+        <!-- Suggestion Status -->
+        <div id="suggestionStatus" class="suggestion-status">
+            <i class="fas fa-magic"></i> AI Suggestions Active
+        </div>
         
         <!-- Preview Button -->
         <button 
             id="previewBtn"
-            class="fixed bottom-6 right-6 bg-blue-600 hover:bg-blue-700 text-white w-14 h-14 rounded-full shadow-lg transition-all duration-300 hover:scale-110 focus:outline-none focus:ring-4 focus:ring-blue-300 flex items-center justify-center"
-            title="Preview HTML"
+            class="fixed top-6 right-6 bg-blue-600 hover:bg-blue-700 text-white w-14 h-14 rounded-full shadow-lg transition-all duration-300 hover:scale-110 focus:outline-none focus:ring-4 focus:ring-blue-300 flex items-center justify-center preview-btn-visible z-50"
+            title="Preview HTML (Ctrl+Enter)"
         >
             <i class="fas fa-eye text-xl"></i>
         </button>
@@ -52,37 +91,237 @@
         <!-- Back Button -->
         <button 
             id="backBtn"
-            class="fixed bottom-6 right-6 bg-gray-600 hover:bg-gray-700 text-white w-14 h-14 rounded-full shadow-lg transition-all duration-300 hover:scale-110 focus:outline-none focus:ring-4 focus:ring-gray-300 flex items-center justify-center"
-            title="Back to Editor"
+            class="fixed top-6 right-6 bg-gray-600 hover:bg-gray-700 text-white w-14 h-14 rounded-full shadow-lg transition-all duration-300 hover:scale-110 focus:outline-none focus:ring-4 focus:ring-gray-300 flex items-center justify-center z-50 opacity-30 hover:opacity-100"
+            title="Back to Editor (Escape)"
         >
             <i class="fas fa-arrow-left text-xl"></i>
         </button>
     </div>
 
+    <!-- Monaco Editor Script -->
+    <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js"></script>
     <script>
         // Dark mode detection and handling
-        if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        let isDarkMode = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        if (isDarkMode) {
             document.documentElement.classList.add('dark');
         }
         window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', event => {
+            isDarkMode = event.matches;
             if (event.matches) {
                 document.documentElement.classList.add('dark');
             } else {
                 document.documentElement.classList.remove('dark');
+            }
+            // Update Monaco theme
+            if (window.monacoEditor) {
+                monaco.editor.setTheme(isDarkMode ? 'vs-dark' : 'vs-light');
             }
         });
 
         // Get DOM elements
         const editorView = document.getElementById('editorView');
         const previewView = document.getElementById('previewView');
-        const codeEditor = document.getElementById('codeEditor');
         const previewFrame = document.getElementById('previewFrame');
         const previewBtn = document.getElementById('previewBtn');
         const backBtn = document.getElementById('backBtn');
+        const suggestionStatus = document.getElementById('suggestionStatus');
+
+        let monacoEditor = null;
+
+        // Configure Monaco Editor
+        require.config({ paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs' }});
+
+        require(['vs/editor/editor.main'], function () {
+            // Register HTML completion provider for enhanced suggestions
+            monaco.languages.registerCompletionItemProvider('html', {
+                provideCompletionItems: function(model, position) {
+                    const suggestions = [
+                        // Enhanced HTML5 semantic elements
+                        {
+                            label: 'article',
+                            kind: monaco.languages.CompletionItemKind.Snippet,
+                            documentation: 'HTML5 semantic article element',
+                            insertText: '<article>\n\t$0\n</article>',
+                            insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet
+                        },
+                        {
+                            label: 'section',
+                            kind: monaco.languages.CompletionItemKind.Snippet,
+                            documentation: 'HTML5 semantic section element',
+                            insertText: '<section>\n\t$0\n</section>',
+                            insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet
+                        },
+                        {
+                            label: 'nav',
+                            kind: monaco.languages.CompletionItemKind.Snippet,
+                            documentation: 'HTML5 navigation element',
+                            insertText: '<nav>\n\t$0\n</nav>',
+                            insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet
+                        },
+                        {
+                            label: 'header',
+                            kind: monaco.languages.CompletionItemKind.Snippet,
+                            documentation: 'HTML5 header element',
+                            insertText: '<header>\n\t$0\n</header>',
+                            insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet
+                        },
+                        {
+                            label: 'footer',
+                            kind: monaco.languages.CompletionItemKind.Snippet,
+                            documentation: 'HTML5 footer element',
+                            insertText: '<footer>\n\t$0\n</footer>',
+                            insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet
+                        },
+                        {
+                            label: 'main',
+                            kind: monaco.languages.CompletionItemKind.Snippet,
+                            documentation: 'HTML5 main content element',
+                            insertText: '<main>\n\t$0\n</main>',
+                            insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet
+                        },
+                        {
+                            label: 'aside',
+                            kind: monaco.languages.CompletionItemKind.Snippet,
+                            documentation: 'HTML5 aside element for sidebars',
+                            insertText: '<aside>\n\t$0\n</aside>',
+                            insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet
+                        },
+                        // Common form elements
+                        {
+                            label: 'form-basic',
+                            kind: monaco.languages.CompletionItemKind.Snippet,
+                            documentation: 'Basic HTML form template',
+                            insertText: '<form action="$1" method="$2">\n\t<label for="$3">$4:</label>\n\t<input type="$5" id="$3" name="$3" required>\n\t<button type="submit">Submit</button>\n</form>',
+                            insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet
+                        },
+                        {
+                            label: 'input-text',
+                            kind: monaco.languages.CompletionItemKind.Snippet,
+                            documentation: 'Text input with label',
+                            insertText: '<label for="$1">$2:</label>\n<input type="text" id="$1" name="$1" placeholder="$3">',
+                            insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet
+                        },
+                        // Responsive image
+                        {
+                            label: 'img-responsive',
+                            kind: monaco.languages.CompletionItemKind.Snippet,
+                            documentation: 'Responsive image with srcset',
+                            insertText: '<img src="$1" srcset="$2" sizes="$3" alt="$4" loading="lazy">',
+                            insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet
+                        },
+                        // CSS Grid container
+                        {
+                            label: 'div-grid',
+                            kind: monaco.languages.CompletionItemKind.Snippet,
+                            documentation: 'CSS Grid container',
+                            insertText: '<div style="display: grid; grid-template-columns: $1; gap: $2;">\n\t$0\n</div>',
+                            insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet
+                        },
+                        // Flexbox container
+                        {
+                            label: 'div-flex',
+                            kind: monaco.languages.CompletionItemKind.Snippet,
+                            documentation: 'Flexbox container',
+                            insertText: '<div style="display: flex; justify-content: $1; align-items: $2;">\n\t$0\n</div>',
+                            insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet
+                        }
+                    ];
+
+                    // Show suggestion status
+                    showSuggestionStatus();
+
+                    return { suggestions: suggestions };
+                }
+            });
+
+            // Create Monaco Editor instance
+            monacoEditor = monaco.editor.create(document.getElementById('editorContainer'), {
+                value: '<!DOCTYPE html>\n<html lang="en">\n<head>\n    <meta charset="UTF-8">\n    <meta name="viewport" content="width=device-width, initial-scale=1.0">\n    <title>Document</title>\n</head>\n<body>\n    \n</body>\n</html>',
+                language: 'html',
+                theme: isDarkMode ? 'vs-dark' : 'vs-light',
+                fontSize: 16,
+                lineNumbers: 'on',
+                wordWrap: 'on',
+                automaticLayout: true,
+                minimap: { enabled: false },
+                scrollBeyondLastLine: false,
+                folding: true,
+                bracketMatching: 'always',
+                autoIndent: 'full',
+                formatOnPaste: true,
+                formatOnType: true,
+                quickSuggestions: {
+                    other: true,
+                    comments: true,
+                    strings: true
+                },
+                parameterHints: {
+                    enabled: true
+                },
+                suggestOnTriggerCharacters: true,
+                acceptSuggestionOnEnter: 'on',
+                tabCompletion: 'on',
+                wordBasedSuggestions: true,
+                // Enhanced IntelliSense settings
+                suggest: {
+                    showKeywords: true,
+                    showSnippets: true,
+                    showColors: true,
+                    showFiles: true,
+                    showReferences: true,
+                    showFolders: true,
+                    showTypeParameters: true,
+                    showVariables: true,
+                    showClasses: true,
+                    showStructs: true,
+                    showInterfaces: true,
+                    showModules: true,
+                    showProperties: true,
+                    showEvents: true,
+                    showOperators: true,
+                    showUnits: true,
+                    showValues: true,
+                    showConstants: true,
+                    showEnums: true,
+                    showEnumMembers: true,
+                    showFunctions: true,
+                    showConstructors: true,
+                    showFields: true,
+                    showText: true
+                }
+            });
+
+            // Add custom key bindings
+            monacoEditor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, function() {
+                if (!previewView.classList.contains('hidden')) {
+                    showEditor();
+                } else {
+                    showPreview();
+                }
+            });
+
+            // Listen for content changes
+            monacoEditor.onDidChangeModelContent(() => {
+                showSuggestionStatus();
+            });
+
+            window.monacoEditor = monacoEditor;
+        });
+
+        // Function to show suggestion status
+        function showSuggestionStatus() {
+            suggestionStatus.classList.add('visible');
+            setTimeout(() => {
+                suggestionStatus.classList.remove('visible');
+            }, 2000);
+        }
 
         // Function to show preview
         function showPreview() {
-            const htmlCode = codeEditor.value;
+            if (!monacoEditor) return;
+            
+            const htmlCode = monacoEditor.getValue();
             
             // Create blob URL for the HTML content
             const blob = new Blob([htmlCode], { type: 'text/html' });
@@ -110,22 +349,35 @@
             
             // Clear iframe source
             previewFrame.src = '';
+            
+            // Focus editor
+            if (monacoEditor) {
+                monacoEditor.focus();
+            }
+        }
+
+        // Function to toggle preview button visibility
+        function togglePreviewButton() {
+            if (previewBtn.classList.contains('preview-btn-visible')) {
+                previewBtn.classList.remove('preview-btn-visible');
+                previewBtn.classList.add('preview-btn-hidden');
+            } else {
+                previewBtn.classList.remove('preview-btn-hidden');
+                previewBtn.classList.add('preview-btn-visible');
+            }
         }
 
         // Event listeners
         previewBtn.addEventListener('click', showPreview);
         backBtn.addEventListener('click', showEditor);
 
-        // Keyboard shortcuts
+        // Global keyboard shortcuts
         document.addEventListener('keydown', (e) => {
-            // Ctrl/Cmd + Enter to preview
-            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+            // Ctrl+F to toggle preview button visibility
+            if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
                 e.preventDefault();
-                if (!previewView.classList.contains('hidden')) {
-                    showEditor();
-                } else {
-                    showPreview();
-                }
+                togglePreviewButton();
+                return;
             }
             
             // Escape to go back to editor
@@ -134,15 +386,11 @@
             }
         });
 
-        // Auto-resize textarea
-        function autoResize() {
-            codeEditor.style.height = 'auto';
-            codeEditor.style.height = codeEditor.scrollHeight + 'px';
-        }
-
         // Focus editor on load
         window.addEventListener('load', () => {
-            codeEditor.focus();
+            if (monacoEditor) {
+                monacoEditor.focus();
+            }
         });
     </script>
 </body>
